@@ -1679,9 +1679,9 @@ expect(node, inputs=[x], outputs=[y], name="test_atanh")
         |          |          |
         ---MatMul---          |
               |               |
-   at_mask---Add              |
-              |               |
     softcap (if provided)     |
+              |               |
+   at_mask---Add              |
               |               |
            Softmax            |
               |               |
