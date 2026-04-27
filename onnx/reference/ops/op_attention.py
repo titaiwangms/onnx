@@ -207,17 +207,14 @@ def _compute_attention(
     # Softcap must be applied before mask so that -inf mask values remain -inf
     # (yielding zero probability in softmax). If softcap were applied after mask,
     # -inf would be mapped to -softcap (finite), leaking probability to masked positions.
-    qk_matmul_output_copy = None
     if softcap is not None:
         qk_matmul_output = _softcap(qk_matmul_output, softcap)
-        if qk_matmul_output_mode == 2:
-            qk_matmul_output_copy = qk_matmul_output.copy()
 
     qk_with_bias = qk_matmul_output + attn_bias
     if qk_matmul_output_mode == 1:
         qk_matmul_output = qk_with_bias.copy()
     elif qk_matmul_output_mode == 2 and softcap is not None:
-        qk_matmul_output = qk_matmul_output_copy
+        pass  # qk_matmul_output already holds the softcapped-only value
 
     if softmax_precision is not None:
         qk_with_bias = qk_with_bias.astype(
