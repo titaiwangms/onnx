@@ -508,12 +508,17 @@ set_source_files_properties(${ONNX_PROTO_SRCS}
     PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE
 )
 
-# Dedicated target for the gen_proto.py step only (produces .proto files).
-# Both onnx_core and onnx_proto run gen_proto.py in a parallel build, creating
-# a race where both write to the same generated .proto paths simultaneously.
-# Serialising only the generation step lets protoc and C++ compilation for both
-# targets proceed in parallel afterwards.
-add_custom_target(onnx_proto_gen DEPENDS ${ONNX_GENERATED_PROTO_FILES})
+# Dedicated target that owns BOTH the gen_proto.py step (produces .proto files)
+# and the protoc step (produces the generated ${ONNX_PROTO_SRCS} .pb.cc/.h).
+# onnx_core and onnx_proto both list ${ONNX_PROTO_SRCS} as sources; if each
+# target carried the protoc custom command independently, the Xcode generator
+# would fail with "Multiple commands produce .../onnx-data.pb.cc" (its build
+# system forbids two targets producing the same file). Making onnx_proto_gen the
+# single owner of the generated sources, and having both libraries depend on it,
+# gives the protoc command exactly one producer. It also runs gen_proto.py +
+# protoc once up front, avoiding a parallel-build write race on the generated
+# files, after which the C++ compilation of both targets proceeds in parallel.
+add_custom_target(onnx_proto_gen DEPENDS ${ONNX_GENERATED_PROTO_FILES} ${ONNX_PROTO_SRCS})
 
 set(LINKED_PROTOBUF_TARGET protobuf::libprotobuf)
 if(ONNX_USE_LITE_PROTO)
@@ -532,7 +537,26 @@ add_dependencies(onnx_proto onnx_proto_gen)
 # protoc and C++ compilation for both targets overlap afterwards.
 add_dependencies(onnx_core onnx_proto_gen)
 
-add_library(onnx $<TARGET_OBJECTS:onnx_core>)
+if(CMAKE_GENERATOR STREQUAL "Xcode")
+  # Under the Xcode generator, consuming onnx_core's objects via
+  # $<TARGET_OBJECTS:onnx_core> does not establish a build-order guarantee, so the
+  # libtool archive step for onnx races ahead of onnx_core's compilation and fails
+  # with "can't open file: .../defs.o (No such file or directory)". Xcode also will
+  # not archive a static library that has no real source of its own (see issue
+  # #7514, regressed by the onnx_core OBJECT-library split). Build libonnx.a from a
+  # generated empty source and link onnx_core as an object library via
+  # target_link_libraries: CMake then records a proper target-level dependency
+  # (Xcode compiles onnx_core before archiving onnx) and still archives all of
+  # onnx_core's object files into libonnx.a, so consumers that extract the archive
+  # get the full symbol set. cf. https://gitlab.kitware.com/cmake/cmake/-/issues/16442.
+  # Guarded to the Xcode generator so Make/Ninja/MSVC output is unchanged.
+  set(ONNX_XCODE_DUMMY_SRC "${CMAKE_CURRENT_BINARY_DIR}/onnx_xcode_dummy.cpp")
+  file(WRITE "${ONNX_XCODE_DUMMY_SRC}" "// Intentionally empty; forces the Xcode generator to emit libonnx.a.\n")
+  add_library(onnx "${ONNX_XCODE_DUMMY_SRC}")
+  target_link_libraries(onnx PRIVATE onnx_core)
+else()
+  add_library(onnx $<TARGET_OBJECTS:onnx_core>)
+endif()
 add_dependencies(onnx onnx_proto onnx_core)
 set_target_properties(onnx_core PROPERTIES CXX_VISIBILITY_PRESET hidden)
 add_onnx_global_defines(onnx_core)
